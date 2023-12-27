@@ -18,6 +18,7 @@ package raft
 //
 
 import (
+	"fmt"
 	//	"bytes"
 	"math/rand"
 	"sync"
@@ -26,6 +27,14 @@ import (
 
 	//	"6.5840/labgob"
 	"6.5840/labrpc"
+)
+
+type Role int
+
+const (
+	Follower Role = iota
+	Candidate
+	Leader
 )
 
 // as each Raft peer becomes aware that successive log entries are
@@ -61,6 +70,7 @@ type Raft struct {
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
 
+	role        Role
 	currentTerm int
 	votedFor    int
 	log         []logEntry
@@ -70,6 +80,8 @@ type Raft struct {
 
 	nextIndex  []int
 	matchIndex []int
+
+	electionTimeout int // 选举的超时时间
 }
 
 type logEntry struct {
@@ -143,17 +155,48 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 // field names must start with capital letters!
 type RequestVoteArgs struct {
 	// Your data here (2A, 2B).
+	Term         int
+	CandidateId  int
+	LastLogIndex int
+	LastLogTerm  int
 }
 
 // example RequestVote RPC reply structure.
 // field names must start with capital letters!
 type RequestVoteReply struct {
 	// Your data here (2A).
+	term        int
+	voteGranted bool
 }
 
 // example RequestVote RPC handler.
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	fmt.Printf("%d getRequestVote from %d, term: %d\n", rf.me, args.CandidateId, args.Term)
+
+	if args.Term < rf.currentTerm {
+		reply.term = rf.currentTerm
+		reply.voteGranted = false
+		return
+	}
+
+	if args.Term > rf.currentTerm {
+		rf.currentTerm = args.Term
+		rf.role = Follower
+	}
+	if rf.votedFor == -1 || rf.votedFor == args.CandidateId {
+		if args.LastLogTerm >= rf.currentTerm && args.LastLogIndex >= len(rf.log) {
+			reply.term = rf.currentTerm
+			reply.voteGranted = true
+			return
+		}
+	}
+	reply.term = rf.currentTerm
+	reply.voteGranted = false
+	return
+
 }
 
 // example code to send a RequestVote RPC to a server.
@@ -259,6 +302,10 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.me = me
 
 	// Your initialization code here (2A, 2B, 2C).
+
+	rf.currentTerm = 0
+	rf.votedFor = -1
+	rf.role = Follower
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
